@@ -83,3 +83,18 @@ def test_search_endpoint_returns_502_when_engines_fail():
         resp = client.post("/search", json={"query": "q"})
     assert resp.status_code == 502
     assert "failing engines: brave (Suspended: too many requests)" in resp.json()["detail"]["error"]
+
+
+async def test_locale_is_sent_as_the_searxng_language():
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.url.params))
+        return httpx.Response(200, json={"results": [result(i) for i in range(5)]})  # one page
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = SearxngProvider(client, "http://sx")
+    await provider.search("q", topic="general", time_range=None, max_results=5, locale="he-IL")
+    await provider.search("q", topic="general", time_range=None, max_results=5)
+    assert seen[0]["language"] == "he-IL"
+    assert "language" not in seen[1]

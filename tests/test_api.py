@@ -1,3 +1,4 @@
+import pytest
 from conftest import FakeAnswerer
 
 
@@ -102,3 +103,32 @@ def test_crawl_bad_regex_is_400(make_client):
             "/crawl", json={"url": "https://docs.example.com/", "select_paths": ["("]}
         )
     assert resp.status_code == 400
+
+
+def test_search_locale_reaches_the_provider(make_client):
+    with make_client() as client:
+        provider = client.app.state.service.provider
+        client.post("/search", json={"query": "q", "language": "he", "country": "il"})
+        client.post("/search", json={"query": "q", "language": "he"})
+        client.post("/search", json={"query": "q"})
+    assert provider.locales == ["he-IL", "he", None]
+
+
+@pytest.mark.parametrize("body", [{"language": "HE"}, {"country": "isr"}, {"country": "IL"}])
+def test_search_rejects_bad_locale(make_client, body):
+    with make_client() as client:
+        assert client.post("/search", json={"query": "q", **body}).status_code == 422
+
+
+def test_extract_reports_a_malformed_url_as_failed(make_client):
+    with make_client() as client:
+        body = client.post("/extract", json={"urls": ["http://[bad"]}).json()
+    assert body["results"] == []
+    assert "invalid URL" in body["failed_results"][0]["error"]
+
+
+@pytest.mark.parametrize("path", ["/map", "/crawl"])
+@pytest.mark.parametrize("url", ["http://[bad", "[bad"])  # with and without a scheme
+def test_map_and_crawl_reject_a_malformed_start_url(make_client, path, url):
+    with make_client() as client:
+        assert client.post(path, json={"url": url}).status_code == 422

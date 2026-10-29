@@ -44,9 +44,11 @@ class FakeProvider:
     def __init__(self, hits: list[Hit]):
         self.hits = hits
         self.queries: list[str] = []
+        self.locales: list[str | None] = []
 
-    async def search(self, query, *, topic, time_range, max_results):
+    async def search(self, query, *, topic, time_range, max_results, locale=None):
         self.queries.append(query)
+        self.locales.append(locale)
         return self.hits[:max_results]
 
     async def images(self, query, *, max_results):

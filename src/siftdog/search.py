@@ -10,7 +10,7 @@ from .extract import Document, extract
 from .fetch import Fetcher, FetchError
 from .models import SearchRequest, SearchResult
 from .providers import Hit, SearchProvider
-from .rank import best_chunks, bm25_scores, combine_scores
+from .rank import chunk, combine_scores, score_groups, select_chunks
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +39,13 @@ def resolve_time_range(req: SearchRequest) -> str | None:
     return "year"
 
 
+def resolve_locale(req: SearchRequest) -> str | None:
+    """SearXNG locale tag: "he-IL" from language + country, "he" from language alone."""
+    if not req.language:
+        return None
+    return f"{req.language}-{req.country.upper()}" if req.country else req.language
+
+
 class SearchService:
     def __init__(
         self, provider: SearchProvider, fetcher: Fetcher, answerer: AnswerGenerator | None
@@ -59,6 +66,7 @@ class SearchService:
             time_range=resolve_time_range(req),
             # Over-fetch so domain filtering and dead pages don't leave us short.
             max_results=max(req.max_results * 2, 10),
+            locale=resolve_locale(req),
         )
         if req.include_domains:
             hits = [h for h in hits if domain_matches(h.url, req.include_domains)]
@@ -82,15 +90,21 @@ class SearchService:
         if advanced or req.include_raw_content:
             docs = await asyncio.gather(*(self._fetch_doc(h.url, raw_fmt, advanced) for h in hits))
 
-        # Snippet relevance is scored across all hits at once so BM25 has corpus statistics.
-        contents = [h.snippet for h in hits]
-        relevance = bm25_scores(req.query, [f"{h.title}\n{h.snippet}" for h in hits])
-        if advanced:
-            for i, doc in enumerate(docs):
-                if doc and doc.content:
-                    chunks, score = best_chunks(req.query, doc.content, req.chunks_per_source)
-                    contents[i] = " [...] ".join(chunks)
-                    relevance[i] = score
+        # Fetched pages are scored by their chunks, the rest by title + snippet, all in one
+        # BM25 corpus so every hit shares the same statistics.
+        pages = [doc.content if advanced and doc and doc.content else None for doc in docs]
+        groups = [
+            chunk(text) if text else [f"{hit.title}\n{hit.snippet}"]
+            for hit, text in zip(hits, pages, strict=True)
+        ]
+        group_scores = score_groups(req.query, groups)
+        relevance = [max(group, default=0.0) for group in group_scores]
+        contents = [
+            " [...] ".join(select_chunks(group, scores, req.chunks_per_source))
+            if text
+            else hit.snippet
+            for hit, text, group, scores in zip(hits, pages, groups, group_scores, strict=True)
+        ]
 
         scores = combine_scores(relevance)
         results = [

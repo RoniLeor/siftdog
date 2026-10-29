@@ -24,7 +24,13 @@ class Hit:
 
 class SearchProvider(Protocol):
     async def search(
-        self, query: str, *, topic: str, time_range: str | None, max_results: int
+        self,
+        query: str,
+        *,
+        topic: str,
+        time_range: str | None,
+        max_results: int,
+        locale: str | None = None,
     ) -> list[Hit]: ...
 
     async def images(self, query: str, *, max_results: int) -> list[str]: ...
@@ -41,11 +47,19 @@ class SearxngProvider:
         self._base_url = base_url.rstrip("/")
 
     async def search(
-        self, query: str, *, topic: str, time_range: str | None, max_results: int
+        self,
+        query: str,
+        *,
+        topic: str,
+        time_range: str | None,
+        max_results: int,
+        locale: str | None = None,
     ) -> list[Hit]:
         params = {"q": query, "categories": "news" if topic == "news" else "general"}
         if time_range:
             params["time_range"] = _TIME_RANGES.get(time_range, time_range)
+        if locale:  # SearXNG locale tag such as "he" or "he-IL"; engines map it to their own
+            params["language"] = locale
         hits: list[Hit] = []
         seen: set[str] = set()
         failed: dict[str, None] = {}  # engines SearXNG reported as failing (ordered set)

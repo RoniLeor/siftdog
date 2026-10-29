@@ -7,12 +7,20 @@ from collections import Counter
 _TOKEN = re.compile(r"\w+", re.UNICODE)
 _STOPWORDS = frozenset(
     "a an and are as at be by for from has have how in is it its of on or that the this to "
-    "was were what when where which who why will with".split()
+    "was were what when where which who why will with "
+    "של על את עם אל זה זו זאת הוא היא הם הן אני כי גם אם או "
+    "מה מי איך למה מתי איפה כל יש אין אבל".split()
 )
+# Hebrew vowel and cantillation marks (category Mn only; maqaf and other punctuation stay).
+_HEBREW_MARKS = re.compile(r"[\u0591-\u05BD\u05BF\u05C1\u05C2\u05C4\u05C5\u05C7]")
+# Quote-like marks inside a Hebrew word mark abbreviations (ת"א, צה"ל) or loan sounds (ג'ינס);
+# dropping them keeps the word as one token on both the query and the document side.
+_HEBREW_QUOTES = re.compile(r"(?<=[\u05D0-\u05EA])[\"'\u05F3\u05F4](?=[\u05D0-\u05EA])")
 
 
 def tokenize(text: str) -> list[str]:
-    return [t for t in _TOKEN.findall(text.lower()) if t not in _STOPWORDS]
+    text = _HEBREW_QUOTES.sub("", _HEBREW_MARKS.sub("", text.lower()))
+    return [t for t in _TOKEN.findall(text) if t not in _STOPWORDS]
 
 
 def bm25_scores(query: str, docs: list[str], k1: float = 1.5, b: float = 0.75) -> list[float]:
@@ -62,14 +70,17 @@ def chunk(text: str, max_chars: int = 500) -> list[str]:
     return chunks
 
 
-def best_chunks(query: str, text: str, n: int) -> tuple[list[str], float]:
-    """Return the n most relevant chunks (in document order) and the top chunk's BM25 score."""
-    chunks = chunk(text)
-    if not chunks:
-        return [], 0.0
-    scores = bm25_scores(query, chunks)
+def score_groups(query: str, groups: list[list[str]]) -> list[list[float]]:
+    """BM25 scores for each group's texts, computed over one corpus of all groups so the
+    IDF is shared (scoring a page's chunks alone makes IDF depend on page length)."""
+    scores = iter(bm25_scores(query, [text for group in groups for text in group]))
+    return [[next(scores) for _ in group] for group in groups]
+
+
+def select_chunks(chunks: list[str], scores: list[float], n: int) -> list[str]:
+    """The n highest-scoring chunks, in document order."""
     top = sorted(range(len(chunks)), key=lambda i: scores[i], reverse=True)[:n]
-    return [chunks[i] for i in sorted(top)], max(scores)
+    return [chunks[i] for i in sorted(top)]
 
 
 def combine_scores(relevance: list[float], weight: float = 0.6) -> list[float]:
