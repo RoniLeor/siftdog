@@ -12,7 +12,9 @@
 """
 
 import asyncio
+import codecs
 import ipaddress
+import re
 import socket
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlsplit
@@ -25,6 +27,8 @@ from .config import Settings
 
 MAX_REDIRECTS = 5
 TEXT_TYPES = ("text/html", "application/xhtml+xml", "text/plain", "application/xml", "text/xml")
+# <meta charset="..."> or <meta http-equiv="Content-Type" content="text/html; charset=...">
+_META_CHARSET = re.compile(rb"<meta[^>]*charset=[\"']?\s*([A-Za-z0-9_.:-]+)", re.IGNORECASE)
 
 
 class FetchError(Exception):
@@ -88,6 +92,27 @@ class PublicOnlyBackend(httpcore.AsyncNetworkBackend):
         await self._inner.sleep(seconds)
 
 
+_CHARSET_ALIASES = {"iso-8859-8-i": "iso-8859-8"}  # legacy Hebrew pages; same bytes, no codec
+
+
+def _codec(name: str | None) -> str | None:
+    """Canonical codec name for `name` (aliases applied); None unless it decodes text."""
+    if not name:
+        return None
+    try:
+        canonical = codecs.lookup(_CHARSET_ALIASES.get(name.lower(), name)).name
+        # Known names that cannot decode text: "undefined", "idna", "rot13", "base64", ...
+        b"\xff".decode(canonical, errors="replace")
+    except (LookupError, ValueError):  # ValueError also covers UnicodeError and a NUL
+        return None
+    return canonical
+
+
+def _meta_charset(body: bytes) -> str | None:
+    match = _META_CHARSET.search(body[:4096])
+    return match.group(1).decode("ascii") if match else None
+
+
 def public_only_transport(backend: httpcore.AsyncNetworkBackend | None = None):
     """httpx transport for fetching user-supplied URLs. Passing an explicit transport also
     stops httpx from routing through HTTP(S)_PROXY env vars, which would bypass the check."""
@@ -111,8 +136,13 @@ class Fetcher:
         self._semaphore = asyncio.Semaphore(settings.fetch_concurrency)
 
     async def fetch(self, url: str) -> Page:
+        total = self._settings.fetch_total_timeout
         async with self._semaphore:
-            return await self._fetch(url)
+            try:
+                async with asyncio.timeout(total):  # httpx's timeout is per phase, not overall
+                    return await self._fetch(url)
+            except TimeoutError as e:
+                raise FetchError(f"fetch exceeded {total} s") from e
 
     async def _fetch(self, url: str) -> Page:
         for _ in range(MAX_REDIRECTS + 1):
@@ -129,7 +159,10 @@ class Fetcher:
                         location = resp.headers.get("location")
                         if not location:
                             raise FetchError(f"redirect without location ({resp.status_code})")
-                        url = urljoin(url, location)
+                        try:
+                            url = urljoin(url, location)
+                        except ValueError as e:
+                            raise FetchError(f"invalid redirect location: {e}") from e
                         continue
                     if resp.status_code >= 400:
                         raise FetchError(f"HTTP {resp.status_code}")
@@ -138,7 +171,7 @@ class Fetcher:
                         raise FetchError(f"unsupported content type: {content_type}")
                     body = await self._read_limited(resp)
                     return Page(url=str(resp.url), html=body, content_type=content_type)
-            except httpx.HTTPError as e:
+            except (httpx.HTTPError, httpx.InvalidURL) as e:
                 raise FetchError(f"{type(e).__name__}: {e}") from e
         raise FetchError("too many redirects")
 
@@ -149,19 +182,28 @@ class Fetcher:
             if size > self._settings.fetch_max_bytes:
                 raise FetchError("response too large")
             chunks.append(chunk)
-        return b"".join(chunks).decode(resp.encoding or "utf-8", errors="replace")
+        body = b"".join(chunks)
+        # Header charset first; legacy pages (e.g. windows-1255) often declare it only in <meta>.
+        encoding = _codec(resp.charset_encoding) or _codec(_meta_charset(body)) or "utf-8"
+        return body.decode(encoding, errors="replace")
 
     async def _check_url(self, url: str) -> None:
-        parts = urlsplit(url)
+        try:
+            parts = urlsplit(url)
+            port = parts.port
+        except ValueError as e:
+            raise FetchError(f"invalid URL: {e}") from e
         if parts.scheme not in ("http", "https") or not parts.hostname:
             raise FetchError("only absolute http(s) URLs are supported")
         if self._settings.allow_private_networks:
             return
         try:
             infos = await asyncio.get_running_loop().getaddrinfo(
-                parts.hostname, parts.port, type=socket.SOCK_STREAM
+                parts.hostname, port, type=socket.SOCK_STREAM
             )
         except socket.gaierror as e:
             raise FetchError(f"DNS resolution failed: {e}") from e
+        except UnicodeError as e:  # IDNA encoding: empty label, label over 63 chars, bad bidi
+            raise FetchError(f"invalid host name: {e}") from e
         if not all(_is_public(info[4][0]) for info in infos):
             raise FetchError("URL resolves to a non-public address")

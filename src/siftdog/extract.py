@@ -54,19 +54,29 @@ def _images_and_links(page: Page) -> tuple[list[str], list[str]]:
     base = page.url
     base_tag = tree.find(".//base[@href]")
     if base_tag is not None:
-        base = urljoin(page.url, base_tag.get("href"))
+        base = _join(page.url, base_tag.get("href")) or page.url
 
     images = _unique(
-        urljoin(base, src)
+        joined
         for src in tree.xpath("//img/@src")
-        if src and not src.startswith("data:")
+        if src and not src.startswith("data:") and (joined := _join(base, src))
     )
     links = _unique(
-        urldefrag(urljoin(base, href))[0]
+        urldefrag(joined)[0]
         for href in tree.xpath("//a/@href")
-        if href and not href.startswith(("mailto:", "javascript:", "tel:", "#"))
+        if href
+        and not href.startswith(("mailto:", "javascript:", "tel:", "#"))
+        and (joined := _join(base, href))
     )
     return images, [u for u in links if u.startswith(("http://", "https://"))]
+
+
+def _join(base: str, ref: str) -> str | None:
+    """urljoin that returns None instead of raising on a malformed reference."""
+    try:
+        return urljoin(base, ref)
+    except ValueError:
+        return None
 
 
 def _unique(items) -> list[str]:

@@ -21,7 +21,8 @@ class Settings(BaseSettings):
     answer_model: str = "claude-opus-5"
     answer_effort: str = "low"
 
-    fetch_timeout: float = 15.0
+    fetch_timeout: float = 15.0  # per connect/read/write phase
+    fetch_total_timeout: float = 30.0  # whole fetch including redirects and body
     fetch_max_bytes: int = 5_000_000
     fetch_concurrency: int = 10
     user_agent: str = "siftdog/0.3"
