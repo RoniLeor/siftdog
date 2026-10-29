@@ -216,19 +216,21 @@ All endpoints take JSON `POST` bodies and a `Authorization: Bearer <key>` header
 
 | Endpoint   | Purpose | Key parameters |
 |------------|---------|----------------|
-| `/search`  | Web search | `query`, `search_depth` (`basic`/`advanced`), `topic` (`general`/`news`), `time_range`, `max_results`, `chunks_per_source`, `include_answer`, `include_raw_content`, `include_images`, `include_domains`, `exclude_domains` |
+| `/search`  | Web search | `query`, `search_depth` (`basic`/`advanced`), `topic` (`general`/`news`), `time_range`, `language`, `country`, `max_results`, `chunks_per_source`, `include_answer`, `include_raw_content`, `include_images`, `include_domains`, `exclude_domains` |
 | `/extract` | Clean content from up to 20 URLs | `urls`, `extract_depth`, `format` (`markdown`/`text`), `include_images` |
 | `/crawl`   | Crawl a site and return page content | `url`, `max_depth`, `max_breadth`, `limit`, `select_paths`, `exclude_paths`, `select_domains`, `exclude_domains`, `allow_external`, `format` |
 | `/map`     | List a site's URLs without content | same traversal parameters as `/crawl` |
 
 Differences from hosted Tavily: `instructions` (crawl/map) and `include_image_descriptions` are
-accepted but ignored; relevance scores come from BM25, not a neural reranker.
+accepted but ignored; relevance scores come from BM25, not a neural reranker; `language` is an
+ISO 639-1 code (`he`) and `country` an ISO 3166-1 alpha-2 code (`IL`) rather than a country
+name, and `country` needs `language` (together they become the SearXNG locale `he-IL`).
 
 ## Configuration
 
 Environment variables (see `.env.example`): `API_KEYS`, `SEARXNG_URL`, `ANSWER_ENABLED`,
-`ANSWER_MODEL`, `ANSWER_EFFORT`, `FETCH_TIMEOUT`, `FETCH_CONCURRENCY`, `FETCH_MAX_BYTES`,
-`ALLOW_PRIVATE_NETWORKS`, `CRAWL_MAX_LIMIT`, `MCP_ALLOWED_HOSTS`.
+`ANSWER_MODEL`, `ANSWER_EFFORT`, `FETCH_TIMEOUT`, `FETCH_TOTAL_TIMEOUT`, `FETCH_CONCURRENCY`,
+`FETCH_MAX_BYTES`, `ALLOW_PRIVATE_NETWORKS`, `CRAWL_MAX_LIMIT`, `MCP_ALLOWED_HOSTS`.
 
 `MCP_ALLOWED_HOSTS` lists the hostnames the `/mcp` endpoint answers besides `localhost`, for
 example `search.example.com,search.example.com:*`. Requests addressed to any other host get
